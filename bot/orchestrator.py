@@ -239,10 +239,11 @@ class Orchestrator:
         self.cycle_count += 1
         now = time.time()
 
-        # Full market scan every 5 minutes
+        # Market scan: moneyline-only every 5 min (fast), full scan every 15 min
         if now - self.last_full_scan >= FULL_SCAN_INTERVAL:
             try:
-                scan = run_full_scan()
+                use_full = (self.cycle_count % 60 == 0)  # Full scan every ~15 min
+                scan = run_full_scan(moneyline_only=not use_full)
                 for event in scan["events"]:
                     self.today_events[event["event_ticker"]] = event
                     for m in event["markets"]:
@@ -272,16 +273,23 @@ class Orchestrator:
                     lead = game["lead"]
                     mins = game["minutes_remaining"]
                     spread = game.get("pregame_spread", 0)
-                    fv = fair_value_cents(lead, mins, home=True, pregame_spread=spread)
+                    home_fv = fair_value_cents(lead, mins, home=True, pregame_spread=spread)
                     delta = delta_per_point(lead, mins, pregame_spread=spread)
                     rev = mean_reversion_estimate(lead, spread, mins)
 
                     # Find matching moneyline/winner markets only
                     matched = self._match_game_to_markets(game)
+                    home_abbr = game["home"]["abbreviation"].upper()
 
                     if matched:
                         for m in matched:
                             ticker = m["ticker"]
+
+                            # Determine if this market is for the home or away team
+                            # Ticker format: KXNCAAMBGAME-26FEB27MICHILL-ILL (last segment = team)
+                            ticker_team = ticker.rsplit("-", 1)[-1].upper()
+                            is_home_market = (ticker_team == home_abbr)
+                            fv = home_fv if is_home_market else (100 - home_fv)
 
                             # Smart API fetch: always for open positions, otherwise every 4th cycle
                             has_position = ticker in self.executor.positions
@@ -316,6 +324,7 @@ class Orchestrator:
                                 "away_score": game["away_score"],
                                 "edge": edge,
                                 "delta": round(delta, 4),
+                                "is_home_market": is_home_market,
                             })
 
                             # Feed to strategy engine
@@ -342,9 +351,11 @@ class Orchestrator:
                         mkt_str = ""
                         if matched:
                             mp = matched[0].get("last_price") or matched[0].get("yes_bid") or "?"
-                            mkt_str = f" | Mkt: {mp}c | Edge: {fv - (mp if isinstance(mp, int) else 50):+d}c"
+                            # Show home team FV for game log
+                            if isinstance(mp, int):
+                                mkt_str = f" | Mkt: {mp}c"
                         self.log(f"[GAME] {game['name']} | {game['away_score']}-{game['home_score']} | "
-                                 f"{game['clock']} P{game['period']} | FV: {fv}c | Δ: {delta:.3f}/pt{mkt_str}")
+                                 f"{game['clock']} P{game['period']} | HomeFV: {home_fv}c | Δ: {delta:.3f}/pt{mkt_str}")
 
             except Exception as e:
                 self.log(f"ESPN poll error: {e}")

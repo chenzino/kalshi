@@ -220,10 +220,69 @@ def save_market_prices(markets):
     return filepath
 
 
-def run_full_scan():
-    """Run a full scan, save results, and return summary."""
-    print(f"[SCANNER] Starting full NCAAB market scan...")
-    data = scan_all_ncaab()
+def scan_moneyline_only():
+    """Fast scan of just moneyline markets (for active trading cycles)."""
+    ts = time.time()
+    date_str = datetime.utcnow().strftime("%Y-%m-%d")
+    results = {
+        "timestamp": ts, "date": date_str,
+        "events": [], "markets": [], "summary": {},
+    }
+    total_events = 0
+    total_markets = 0
+    total_volume = 0
+
+    # Only scan moneyline series (2 calls instead of 10)
+    for series in ["KXNCAAMBGAME", "KXNCAABGAME"]:
+        events = fetch_events(series)
+        for event in events:
+            event_data = {
+                "event_ticker": event.get("event_ticker", ""),
+                "series": series,
+                "title": event.get("title", ""),
+                "sub_title": event.get("sub_title", ""),
+                "markets": [],
+            }
+            for market in event.get("markets", []):
+                market_data = {
+                    "ticker": market.get("ticker", ""),
+                    "event_ticker": event.get("event_ticker", ""),
+                    "series": series,
+                    "subtitle": market.get("subtitle", ""),
+                    "yes_bid": market.get("yes_bid"),
+                    "yes_ask": market.get("yes_ask"),
+                    "last_price": market.get("last_price"),
+                    "volume": market.get("volume", 0),
+                    "open_interest": market.get("open_interest", 0),
+                    "status": market.get("status", ""),
+                    "close_time": market.get("close_time", ""),
+                    "result": market.get("result", ""),
+                }
+                event_data["markets"].append(market_data)
+                results["markets"].append(market_data)
+                total_markets += 1
+                total_volume += market.get("volume", 0)
+            results["events"].append(event_data)
+            total_events += 1
+
+    results["summary"] = {
+        "total_events": total_events,
+        "total_markets": total_markets,
+        "total_volume": total_volume,
+        "series_scanned": 2,
+        "scan_time": round(time.time() - ts, 2),
+    }
+    return results
+
+
+def run_full_scan(moneyline_only=False):
+    """Run a scan, save results, and return summary."""
+    if moneyline_only:
+        print(f"[SCANNER] Quick moneyline scan...")
+        data = scan_moneyline_only()
+    else:
+        print(f"[SCANNER] Starting full NCAAB market scan...")
+        data = scan_all_ncaab()
     save_scan(data, "full")
     save_market_prices(data["markets"])
 
