@@ -19,6 +19,8 @@ from bot.model import win_probability, fair_value_cents, delta_per_point, mean_r
 from bot.data_logger import log_game_state, log_market_snapshot, get_session_stats
 from bot.strategy import StrategyEngine
 from bot.learner import run_session_analysis
+from bot.executor import Executor
+from bot.status_feed import write_status
 
 EST = timezone(timedelta(hours=-5))
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
@@ -63,6 +65,7 @@ class Orchestrator:
         self.live_games = []
         self.game_histories = {}  # espn_id -> list of snapshots
         self.auth_ok = False
+        self.game_market_cache = {}  # espn_id -> list of matched tickers
 
         # Try to load Kalshi client for authenticated ops
         try:
@@ -76,6 +79,9 @@ class Orchestrator:
         except Exception as e:
             self.log(f"Kalshi client init failed: {e}")
             self.client = None
+
+        # Executor handles real order placement
+        self.executor = Executor(self.client if self.client else None, log_fn=self.log)
 
     def log(self, msg):
         ts = est_now().strftime("%I:%M:%S %p")
@@ -257,6 +263,19 @@ class Orchestrator:
                     if matched:
                         for m in matched:
                             ticker = m["ticker"]
+
+                            # Fetch fresh price from API if authenticated
+                            if self.auth_ok:
+                                try:
+                                    fresh = self.client.get_market(ticker)
+                                    md = fresh.get("market", fresh)
+                                    m["yes_bid"] = md.get("yes_bid", m.get("yes_bid"))
+                                    m["yes_ask"] = md.get("yes_ask", m.get("yes_ask"))
+                                    m["last_price"] = md.get("last_price", m.get("last_price"))
+                                    m["volume"] = md.get("volume", m.get("volume", 0))
+                                except Exception:
+                                    pass
+
                             market_price = m.get("last_price") or m.get("yes_bid") or 50
                             edge = fv - market_price
 
@@ -277,6 +296,11 @@ class Orchestrator:
 
                             # Feed to strategy engine
                             self.strategy.on_price_update(ticker, m, game, fv, edge)
+
+                            # Feed signals to executor for real trades
+                            for sig in self.strategy.signals[-5:]:
+                                if sig.ticker == ticker and (time.time() - sig.ts) < 2:
+                                    self.executor.on_signal(sig.to_dict())
 
                     # Periodic game log
                     if self.cycle_count % 4 == 1:
@@ -301,17 +325,37 @@ class Orchestrator:
             except Exception as e:
                 self.log(f"Price snap error: {e}")
 
+        # Check positions for fills/exits
+        if self.auth_ok and self.executor.positions:
+            current_prices = {}
+            for ticker in list(self.executor.positions.keys()):
+                m = self.today_markets.get(ticker)
+                if m:
+                    current_prices[ticker] = m.get("last_price") or m.get("yes_bid") or 50
+            self.executor.check_positions(current_prices)
+
         # Re-check auth periodically
         if not self.auth_ok and self.cycle_count % 120 == 0:
             self.check_auth()
+
+        # Write status feed for dashboard (every 4 cycles = ~1 min)
+        if self.cycle_count % 4 == 0:
+            try:
+                write_status(self)
+            except Exception as e:
+                pass  # Non-critical
 
         # Periodic stats
         if self.cycle_count % 60 == 0:  # Every ~15 min
             n_games = len(self.live_games)
             n_markets = len(self.today_markets)
             n_tracked = len(self.game_histories)
+            exec_status = self.executor.get_status()
             self.log(f"[STATUS] Games: {n_games} live, {n_tracked} tracked | "
-                     f"Markets: {n_markets} | Auth: {'OK' if self.auth_ok else 'NO'}")
+                     f"Markets: {n_markets} | Auth: {'OK' if self.auth_ok else 'NO'} | "
+                     f"Positions: {exec_status['open_positions']} | "
+                     f"Trades: {exec_status['total_trades']} | "
+                     f"P&L: {exec_status['total_pnl']:+d}c")
 
         time.sleep(LIVE_POLL_INTERVAL)
 
