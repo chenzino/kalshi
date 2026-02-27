@@ -276,15 +276,20 @@ class Orchestrator:
                     delta = delta_per_point(lead, mins, pregame_spread=spread)
                     rev = mean_reversion_estimate(lead, spread, mins)
 
-                    # Find matching Kalshi markets
+                    # Find matching moneyline/winner markets only
                     matched = self._match_game_to_markets(game)
 
                     if matched:
                         for m in matched:
                             ticker = m["ticker"]
 
-                            # Fetch fresh price from API if authenticated
-                            if self.auth_ok:
+                            # Smart API fetch: always for open positions, otherwise every 4th cycle
+                            has_position = ticker in self.executor.positions
+                            should_fetch = self.auth_ok and (
+                                has_position or self.cycle_count % 4 == 0
+                            )
+
+                            if should_fetch:
                                 try:
                                     fresh = self.client.get_market(ticker)
                                     md = fresh.get("market", fresh)
@@ -315,6 +320,9 @@ class Orchestrator:
 
                             # Feed to strategy engine
                             self.strategy.on_price_update(ticker, m, game, fv, edge)
+
+                            # Update model FV for open positions (for dynamic exits)
+                            self.executor.update_model_fv(ticker, fv, market_price)
 
                             # Feed signals to executor for real trades
                             for sig in self.strategy.signals[-5:]:
@@ -419,30 +427,27 @@ class Orchestrator:
         time.sleep(sleep_chunk)
 
     def _match_game_to_markets(self, game):
-        """Match an ESPN game to Kalshi markets using team abbreviations and names.
+        """Match an ESPN game to Kalshi moneyline markets.
         Caches matches by espn_id for performance."""
+        return self._match_markets_by_type(game, ["GAME", "WINNER"])
+
+    def _match_markets_by_type(self, game, type_keywords):
+        """Match markets containing specific series keywords."""
         espn_id = game.get("espn_id", "")
 
-        # Check cache first
+        # Check simple cache
         if espn_id in self.game_market_cache:
             cached = self.game_market_cache[espn_id]
-            # Return fresh market data for cached tickers
             return [self.today_markets[t] for t in cached if t in self.today_markets]
 
         home_abbr = game["home"]["abbreviation"].upper()
         away_abbr = game["away"]["abbreviation"].upper()
-        home_name = game["home"]["name"].upper()
-        away_name = game["away"]["name"].upper()
-        # Also try short names (e.g., "MICHIGAN" from "Michigan Wolverines")
         home_short = game["home"].get("shortDisplayName", "").upper()
         away_short = game["away"].get("shortDisplayName", "").upper()
 
         matched = []
         for ticker, m in self.today_markets.items():
             ticker_upper = ticker.upper()
-            title_upper = m.get("title", "").upper()
-
-            # Check ticker and title for team abbreviations/names
             found = False
             for team_id in [home_abbr, away_abbr]:
                 if team_id and len(team_id) >= 2 and team_id in ticker_upper:
@@ -450,19 +455,19 @@ class Orchestrator:
                     break
 
             if not found:
-                # Try matching against event/market title
-                for name in [home_name, away_name, home_short, away_short]:
+                title_upper = m.get("title", "").upper()
+                for name in [home_short, away_short]:
                     if name and len(name) >= 4 and name in title_upper:
                         found = True
                         break
 
             if found:
                 series = m.get("series", "")
-                # Moneyline markets (game winner)
-                if "GAME" in series or "WINNER" in series:
-                    matched.append(m)
+                for kw in type_keywords:
+                    if kw in series:
+                        matched.append(m)
+                        break
 
-        # Cache the matched tickers
         if matched:
             self.game_market_cache[espn_id] = [m["ticker"] for m in matched]
 
