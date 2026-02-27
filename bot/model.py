@@ -26,14 +26,19 @@ def win_probability(lead, minutes_remaining, home=True, pregame_spread=0):
     # Time fraction remaining
     t_frac = minutes_remaining / GAME_LENGTH_MIN
 
-    # Home court advantage: add expected remaining advantage
-    home_drift = HOME_ADVANTAGE * t_frac if home else -HOME_ADVANTAGE * t_frac
+    # Drift from pregame spread or home advantage
+    # When pregame_spread is provided (from DraftKings), it already includes home court
+    # Only add HOME_ADVANTAGE when we don't have a real pregame spread
+    if pregame_spread != 0:
+        # Pregame spread already includes home court, use directly
+        expected_remaining_margin = pregame_spread * t_frac
+    else:
+        # No pregame spread available, use home court as proxy
+        home_drift = HOME_ADVANTAGE * t_frac if home else -HOME_ADVANTAGE * t_frac
+        expected_remaining_margin = home_drift
 
-    # Drift: expected points per minute remaining based on pre-game spread
-    expected_remaining_margin = pregame_spread * t_frac
-
-    # Current effective lead including expected remaining drift + home advantage
-    effective_lead = lead + expected_remaining_margin + home_drift
+    # Current effective lead including expected remaining drift
+    effective_lead = lead + expected_remaining_margin
 
     # Standard deviation scales with sqrt of remaining time fraction
     sigma_remaining = SIGMA * math.sqrt(t_frac)
@@ -82,6 +87,106 @@ def mean_reversion_estimate(current_lead, pregame_spread, minutes_remaining):
     expected_reversion = -excess * (1 - beta) * (minutes_remaining / GAME_LENGTH_MIN)
 
     return expected_reversion
+
+
+def spread_probability(lead, minutes_remaining, spread_line, home=True, pregame_spread=0):
+    """Calculate probability that home team wins by more than spread_line points.
+
+    For a Kalshi spread market "TEAM wins by X+", this calculates P(final_margin > X).
+
+    Args:
+        lead: Current point differential (positive = home leads)
+        minutes_remaining: Minutes remaining
+        spread_line: The spread line (e.g., 1 means home wins by >1)
+        home: Whether calculating for home team
+        pregame_spread: Expected final margin from pregame line
+    Returns:
+        Probability as float 0-1
+    """
+    if minutes_remaining <= 0:
+        return 1.0 if lead > spread_line else 0.0
+
+    t_frac = minutes_remaining / GAME_LENGTH_MIN
+    if pregame_spread != 0:
+        expected_remaining = pregame_spread * t_frac
+    else:
+        expected_remaining = (HOME_ADVANTAGE * t_frac) if home else (-HOME_ADVANTAGE * t_frac)
+    effective_lead = lead + expected_remaining
+
+    sigma_remaining = SIGMA * math.sqrt(t_frac)
+    if sigma_remaining < 0.01:
+        return 1.0 if effective_lead > spread_line else 0.0
+
+    # P(final_lead > spread_line) = P(final_lead - spread_line > 0)
+    z = (effective_lead - spread_line) / sigma_remaining
+    return float(norm.cdf(z))
+
+
+def spread_fair_value(lead, minutes_remaining, spread_line, home=True, pregame_spread=0):
+    """Return fair value in cents for a spread market."""
+    p = spread_probability(lead, minutes_remaining, spread_line, home, pregame_spread)
+    return max(1, min(99, round(p * 100)))
+
+
+def total_probability(home_score, away_score, minutes_remaining, total_line, pregame_total=None):
+    """Calculate probability that total points exceed total_line.
+
+    Uses Brownian motion on total scoring pace.
+
+    Args:
+        home_score, away_score: Current scores
+        minutes_remaining: Minutes remaining
+        total_line: The total line (e.g., 157 = over 157 total points)
+        pregame_total: Expected total from O/U line (default: use pace estimate)
+    Returns:
+        Probability of going over as float 0-1
+    """
+    current_total = home_score + away_score
+    minutes_played = GAME_LENGTH_MIN - minutes_remaining
+
+    if minutes_remaining <= 0:
+        return 1.0 if current_total > total_line else 0.0
+
+    if minutes_played <= 0:
+        # Game hasn't started, use pregame total or default
+        expected_total = pregame_total or 155  # Average NCAAB total
+        pace_sigma = 12.0  # Typical standard deviation of total points
+        z = (expected_total - total_line) / pace_sigma
+        return float(norm.cdf(z))
+
+    # Current scoring pace (points per minute)
+    pace = current_total / minutes_played
+
+    # Project remaining points at current pace
+    projected_remaining = pace * minutes_remaining
+    projected_total = current_total + projected_remaining
+
+    # If we have pregame total, blend current pace with pregame expectation
+    if pregame_total:
+        pregame_remaining = pregame_total - current_total
+        # Weight current pace more as game progresses
+        game_weight = minutes_played / GAME_LENGTH_MIN
+        blended_remaining = (projected_remaining * game_weight +
+                           pregame_remaining * (1 - game_weight))
+        projected_total = current_total + blended_remaining
+
+    # Variance scales with remaining time
+    # Total points sigma is about 12 for full game
+    TOTAL_SIGMA = 12.0
+    t_frac = minutes_remaining / GAME_LENGTH_MIN
+    sigma_remaining = TOTAL_SIGMA * math.sqrt(t_frac)
+
+    if sigma_remaining < 0.01:
+        return 1.0 if projected_total > total_line else 0.0
+
+    z = (projected_total - total_line) / sigma_remaining
+    return float(norm.cdf(z))
+
+
+def total_fair_value(home_score, away_score, minutes_remaining, total_line, pregame_total=None):
+    """Return fair value in cents for a total points market."""
+    p = total_probability(home_score, away_score, minutes_remaining, total_line, pregame_total)
+    return max(1, min(99, round(p * 100)))
 
 
 def detect_scoring_run(score_log, window=5):
