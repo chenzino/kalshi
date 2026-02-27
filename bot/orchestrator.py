@@ -18,6 +18,7 @@ from bot.espn_feed import get_live_games, get_todays_schedule
 from bot.model import win_probability, fair_value_cents, delta_per_point, mean_reversion_estimate
 from bot.data_logger import log_game_state, log_market_snapshot, get_session_stats
 from bot.strategy import StrategyEngine
+from bot.learner import run_session_analysis
 
 EST = timezone(timedelta(hours=-5))
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
@@ -175,6 +176,23 @@ class Orchestrator:
                 self.log(f"Daily report saved")
         except Exception as e:
             self.log(f"Report error: {e}")
+
+        # Run learning analysis - grades signals, calibrates model, paper trades
+        try:
+            learning_report = run_session_analysis()
+            if learning_report:
+                paper = learning_report.get("paper_trades", {})
+                self.log(f"[LEARN] Paper trades: {paper.get('trades',0)} | "
+                         f"Win rate: {paper.get('win_rate',0)}% | "
+                         f"Net P&L: {paper.get('total_net_pnl',0)}c")
+
+                recs = learning_report.get("parameter_recommendations", {})
+                for key, rec in recs.items():
+                    self.log(f"[LEARN] Recommendation: {rec.get('reason', key)}")
+        except Exception as e:
+            self.log(f"Learning analysis error: {e}")
+            import traceback
+            traceback.print_exc()
 
         # Session stats
         stats = get_session_stats()
