@@ -1,6 +1,6 @@
 {
-  "updated_at": 1772217483.4199486,
-  "updated_at_str": "01:38:03 PM EST",
+  "updated_at": 1772218492.9011643,
+  "updated_at_str": "01:54:52 PM EST",
   "date": "2026-02-27",
   "session_active": false,
   "auth_ok": true,
@@ -18,5 +18,27 @@
   },
   "recent_signals": [],
   "markets_tracked": 0,
-  "games_tracked": 0
+  "games_tracked": 0,
+  "tonight_schedule": [
+    {
+      "name": "Miami (OH) RedHawks @ Western Michigan Broncos",
+      "state": "pre",
+      "start": "2026-02-27T23:00Z",
+      "pregame_spread": -11.5,
+      "odds_detail": "M-OH -11.5",
+      "over_under": 163.5,
+      "home_moneyline": "+575",
+      "away_moneyline": "-850"
+    },
+    {
+      "name": "Michigan Wolverines @ Illinois Fighting Illini",
+      "state": "pre",
+      "start": "2026-02-28T01:00Z",
+      "pregame_spread": -1.5,
+      "odds_detail": "MICH -1.5",
+      "over_under": 159.5,
+      "home_moneyline": "+105",
+      "away_moneyline": "-125"
+    }
+  ]
 }

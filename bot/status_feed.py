@@ -49,8 +49,9 @@ def write_status(orchestrator, next_session=None):
         from bot.model import fair_value_cents, delta_per_point
         lead = game.get("lead", 0)
         mins = game.get("minutes_remaining", 40)
-        fv = fair_value_cents(lead, mins)
-        delta = delta_per_point(lead, mins)
+        spread = game.get("pregame_spread", 0)
+        fv = fair_value_cents(lead, mins, pregame_spread=spread)
+        delta = delta_per_point(lead, mins, pregame_spread=spread)
 
         gdata = {
             "name": game.get("name", ""),
@@ -61,7 +62,14 @@ def write_status(orchestrator, next_session=None):
             "minutes_remaining": mins,
             "model_fv": fv,
             "delta_per_point": round(delta, 4),
+            "pregame_spread": spread,
         }
+
+        # Odds info
+        odds = game.get("odds", {})
+        if odds:
+            gdata["odds_detail"] = odds.get("details", "")
+            gdata["over_under"] = odds.get("over_under")
 
         # Find matched market price
         matched = orchestrator._match_game_to_markets(game)
@@ -89,6 +97,29 @@ def write_status(orchestrator, next_session=None):
     # Markets tracked
     status["markets_tracked"] = len(orchestrator.today_markets)
     status["games_tracked"] = len(orchestrator.game_histories)
+
+    # Tonight's schedule preview (even during sleep)
+    if not orchestrator.live_games:
+        try:
+            from bot.espn_feed import get_todays_schedule
+            schedule = get_todays_schedule()
+            status["tonight_schedule"] = []
+            for g in schedule:
+                entry = {
+                    "name": g.get("name", ""),
+                    "state": g.get("state", ""),
+                    "start": g.get("start", ""),
+                    "pregame_spread": g.get("pregame_spread", 0),
+                }
+                odds = g.get("odds", {})
+                if odds:
+                    entry["odds_detail"] = odds.get("details", "")
+                    entry["over_under"] = odds.get("over_under")
+                    entry["home_moneyline"] = odds.get("home_moneyline", "")
+                    entry["away_moneyline"] = odds.get("away_moneyline", "")
+                status["tonight_schedule"].append(entry)
+        except Exception:
+            pass
 
     # Write to file
     filepath = os.path.join(DATA_DIR, "live_status.json")

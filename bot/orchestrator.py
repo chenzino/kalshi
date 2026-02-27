@@ -250,12 +250,13 @@ class Orchestrator:
                     # Log game state
                     log_game_state(game)
 
-                    # Calculate model values
+                    # Calculate model values (with pregame spread from ESPN/DraftKings)
                     lead = game["lead"]
                     mins = game["minutes_remaining"]
-                    fv = fair_value_cents(lead, mins, home=True)
-                    delta = delta_per_point(lead, mins)
-                    rev = mean_reversion_estimate(lead, 0, mins)
+                    spread = game.get("pregame_spread", 0)
+                    fv = fair_value_cents(lead, mins, home=True, pregame_spread=spread)
+                    delta = delta_per_point(lead, mins, pregame_spread=spread)
+                    rev = mean_reversion_estimate(lead, spread, mins)
 
                     # Find matching Kalshi markets
                     matched = self._match_game_to_markets(game)
