@@ -1,0 +1,8 @@
+.env
+data/trades/
+data/market_snapshots/
+data/games/
+__pycache__/
+*.pyc
+bot/__pycache__/
+kalshi_private_key.pem
