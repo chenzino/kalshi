@@ -279,7 +279,7 @@ class Orchestrator:
 
                     # Find matching moneyline/winner markets only
                     matched = self._match_game_to_markets(game)
-                    home_abbr = game["home"]["abbreviation"].upper()
+                    home_abbr = game["home"]["abbreviation"].upper().replace("-", "")
 
                     if matched:
                         for m in matched:
@@ -443,7 +443,12 @@ class Orchestrator:
         return self._match_markets_by_type(game, ["GAME", "WINNER"])
 
     def _match_markets_by_type(self, game, type_keywords):
-        """Match markets containing specific series keywords."""
+        """Match markets by checking the ticker's team suffix (last segment after -).
+
+        Ticker format: KXNCAAMBGAME-26FEB27MICHILL-MICH
+        The last segment after the final dash is the team abbreviation.
+        We match this against ESPN team abbreviations (with dashes stripped).
+        """
         espn_id = game.get("espn_id", "")
 
         # Check simple cache
@@ -451,33 +456,33 @@ class Orchestrator:
             cached = self.game_market_cache[espn_id]
             return [self.today_markets[t] for t in cached if t in self.today_markets]
 
-        home_abbr = game["home"]["abbreviation"].upper()
-        away_abbr = game["away"]["abbreviation"].upper()
+        # Normalize ESPN abbreviations: strip dashes (e.g., M-OH -> MOH)
+        home_abbr = game["home"]["abbreviation"].upper().replace("-", "")
+        away_abbr = game["away"]["abbreviation"].upper().replace("-", "")
         home_short = game["home"].get("shortDisplayName", "").upper()
         away_short = game["away"].get("shortDisplayName", "").upper()
 
         matched = []
         for ticker, m in self.today_markets.items():
-            ticker_upper = ticker.upper()
-            found = False
-            for team_id in [home_abbr, away_abbr]:
-                if team_id and len(team_id) >= 2 and team_id in ticker_upper:
-                    found = True
+            # Check series type first (cheap filter)
+            series = m.get("series", "")
+            if not any(kw in series for kw in type_keywords):
+                continue
+
+            # Extract team from ticker suffix: last segment after final dash
+            ticker_team = ticker.rsplit("-", 1)[-1].upper()
+
+            # Match against ESPN team abbreviations
+            if ticker_team == home_abbr or ticker_team == away_abbr:
+                matched.append(m)
+                continue
+
+            # Fallback: check market title for team shortDisplayName
+            title_upper = m.get("title", "").upper()
+            for name in [home_short, away_short]:
+                if name and len(name) >= 4 and name in title_upper:
+                    matched.append(m)
                     break
-
-            if not found:
-                title_upper = m.get("title", "").upper()
-                for name in [home_short, away_short]:
-                    if name and len(name) >= 4 and name in title_upper:
-                        found = True
-                        break
-
-            if found:
-                series = m.get("series", "")
-                for kw in type_keywords:
-                    if kw in series:
-                        matched.append(m)
-                        break
 
         if matched:
             self.game_market_cache[espn_id] = [m["ticker"] for m in matched]
