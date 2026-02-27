@@ -21,6 +21,7 @@ from bot.strategy import StrategyEngine
 from bot.learner import run_session_analysis
 from bot.executor import Executor
 from bot.status_feed import write_status
+from bot.event_log import log_event
 
 EST = timezone(timedelta(hours=-5))
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
@@ -163,6 +164,23 @@ class Orchestrator:
         post_count = sum(1 for g in schedule if g["state"] == "post")
         self.log(f"ESPN: {len(schedule)} games ({pre_count} pre, {live_count} live, {post_count} final)")
 
+        # Log spreads for today's games
+        for g in schedule:
+            spread = g.get("pregame_spread", 0)
+            odds = g.get("odds", {})
+            detail = odds.get("details", "")
+            if detail:
+                self.log(f"  {g['name']}: {detail}, O/U {odds.get('over_under', '?')}")
+
+        log_event("session_start", {
+            "events": s["total_events"],
+            "markets": s["total_markets"],
+            "volume": s["total_volume"],
+            "games": len(schedule),
+            "auth": self.auth_ok,
+            "schedule": [{"name": g["name"], "spread": g.get("pregame_spread", 0)} for g in schedule],
+        })
+
         self.log("")
 
     def _end_session(self):
@@ -302,6 +320,14 @@ class Orchestrator:
                             for sig in self.strategy.signals[-5:]:
                                 if sig.ticker == ticker and (time.time() - sig.ts) < 2:
                                     self.executor.on_signal(sig.to_dict())
+                                    log_event("signal", {
+                                        "strategy": sig.strategy,
+                                        "ticker": sig.ticker,
+                                        "side": sig.side,
+                                        "strength": sig.strength,
+                                        "edge": sig.edge,
+                                        "game": game["name"],
+                                    })
 
                     # Periodic game log
                     if self.cycle_count % 4 == 1:

@@ -1,6 +1,6 @@
 {
-  "updated_at": 1772218492.9011643,
-  "updated_at_str": "01:54:52 PM EST",
+  "updated_at": 1772218635.4088135,
+  "updated_at_str": "01:57:15 PM EST",
   "date": "2026-02-27",
   "session_active": false,
   "auth_ok": true,
@@ -39,6 +39,16 @@
       "over_under": 159.5,
       "home_moneyline": "+105",
       "away_moneyline": "-125"
+    }
+  ],
+  "recent_events": [
+    {
+      "ts": 1772218628.2946477,
+      "time": "01:57:08 PM",
+      "type": "test",
+      "data": {
+        "msg": "compile check"
+      }
     }
   ]
 }

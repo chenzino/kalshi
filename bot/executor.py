@@ -17,6 +17,7 @@ import json
 import os
 from datetime import datetime, timezone, timedelta
 from bot.data_logger import log_trade
+from bot.event_log import log_event
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
 EST = timezone(timedelta(hours=-5))
@@ -166,8 +167,15 @@ class Executor:
                 "game": signal.get("game_context", {}).get("name", ""),
             })
 
+            log_event("trade_open", {
+                "ticker": ticker, "side": side, "price": price,
+                "strategy": signal.get("strategy", ""),
+                "edge": signal.get("edge", 0),
+            })
+
         except Exception as e:
             self.log(f"ORDER FAILED {ticker}: {e}")
+            log_event("trade_error", {"ticker": ticker, "error": str(e)})
 
     def check_positions(self, current_prices=None):
         """Check all open positions for fills, exits, timeouts."""
@@ -260,6 +268,11 @@ class Executor:
             "exit_reason": reason,
             "hold_time": round(time.time() - pos.entry_time),
             "strategy": pos.signal.get("strategy", ""),
+        })
+
+        log_event("trade_close", {
+            "ticker": ticker, "reason": reason, "pnl": pnl,
+            "total_pnl": self.total_pnl, "strategy": pos.signal.get("strategy", ""),
         })
 
     def get_status(self):

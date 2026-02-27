@@ -121,6 +121,13 @@ def write_status(orchestrator, next_session=None):
         except Exception:
             pass
 
+    # Recent events
+    try:
+        from bot.event_log import get_recent_events
+        status["recent_events"] = get_recent_events(20)
+    except Exception:
+        status["recent_events"] = []
+
     # Write to file
     filepath = os.path.join(DATA_DIR, "live_status.json")
     _ensure_dir(DATA_DIR)
