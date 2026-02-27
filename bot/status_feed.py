@@ -16,7 +16,7 @@ def _ensure_dir(path):
     os.makedirs(path, exist_ok=True)
 
 
-def write_status(orchestrator):
+def write_status(orchestrator, next_session=None):
     """Write current system status to JSON for dashboard consumption."""
     now = datetime.now(EST)
 
@@ -28,6 +28,9 @@ def write_status(orchestrator):
         "auth_ok": orchestrator.auth_ok,
         "cycle_count": orchestrator.cycle_count,
     }
+
+    if next_session:
+        status["next_session"] = next_session
 
     # Balance
     if orchestrator.auth_ok and orchestrator.client:

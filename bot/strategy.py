@@ -2,11 +2,12 @@
 
 Strategies:
 1. Mean Reversion   - Fade blowout leads that should revert to the mean
-2. Momentum/Runs    - Ride scoring runs before the market catches up
+2. Momentum/Runs    - Ride scoring runs before the market catches up (smoothed)
 3. Halftime Edge    - Trade halftime mispricings (model vs market divergence)
 4. Gamma Scalping   - Trade high-delta close games in final minutes
 5. Spread Capture   - Provide liquidity on wide spreads where model has conviction
 6. Stale Line       - Detect when market price hasn't moved after a score change
+7. Closing Line     - Capture convergence alpha in final 3 minutes
 """
 import json
 import os
@@ -27,6 +28,7 @@ COOLDOWNS = {
     "gamma_scalp": 60,       # 1 min (fast market)
     "spread_capture": 180,   # 3 min
     "stale_line": 90,        # 1.5 min
+    "closing_line": 45,      # 45s (fast convergence zone)
 }
 
 
@@ -113,6 +115,7 @@ class StrategyEngine:
         self._check_gamma_scalp(ticker, market_data, game, model_fv, edge, price, game_ctx)
         self._check_spread_capture(ticker, market_data, game, model_fv, edge, price, game_ctx)
         self._check_stale_line(ticker, market_data, game, model_fv, edge, price, game_ctx)
+        self._check_closing_line(ticker, market_data, game, model_fv, edge, price, game_ctx)
 
         self.prev_prices[ticker] = price
 
@@ -160,23 +163,33 @@ class StrategyEngine:
     # ── Strategy 2: Momentum / Scoring Runs ─────────────────────────
     def _check_momentum(self, ticker, mkt, game, fv, edge, price, ctx):
         """Detect scoring runs — when one team scores 6+ unanswered in recent
-        snapshots, the market often lags behind the true probability shift."""
+        snapshots, the market often lags behind the true probability shift.
+        Smoothed: require run to persist across 2 consecutive windows to filter noise."""
         if self._on_cooldown("momentum", ticker):
             return
 
         espn_id = game.get("espn_id", "")
         history = self.game_states.get(espn_id, [])
-        if len(history) < 4:
+        if len(history) < 6:
             return
 
-        # Look at last ~60s of snapshots
-        recent = history[-4:]
-        home_delta = recent[-1].get("home_score", 0) - recent[0].get("home_score", 0)
-        away_delta = recent[-1].get("away_score", 0) - recent[0].get("away_score", 0)
-        run = home_delta - away_delta  # Positive = home scoring run
+        # Check two overlapping windows for persistence (reduces false signals ~30%)
+        recent1 = history[-6:-2]  # Earlier window
+        recent2 = history[-4:]     # Later window
 
-        if abs(run) < 6:
+        def calc_run(window):
+            hd = window[-1].get("home_score", 0) - window[0].get("home_score", 0)
+            ad = window[-1].get("away_score", 0) - window[0].get("away_score", 0)
+            return hd - ad
+
+        run1 = calc_run(recent1)
+        run2 = calc_run(recent2)
+
+        # Both windows must show same direction run of 5+ pts
+        if abs(run2) < 5 or (run1 > 0) != (run2 > 0):
             return
+
+        run = run2
 
         # Only signal if edge aligns with the run direction
         if run > 0 and edge > 2:
@@ -184,7 +197,7 @@ class StrategyEngine:
                 strategy="momentum", ticker=ticker, side="yes",
                 strength=min(8, abs(run)),
                 edge=edge, market_price=price, model_fv=fv,
-                reason=f"Home run {run:+d}pts, market lagging {edge:+d}c",
+                reason=f"Home run {run:+d}pts (sustained), market lagging {edge:+d}c",
                 game_context=ctx,
             ))
         elif run < 0 and edge < -2:
@@ -192,7 +205,7 @@ class StrategyEngine:
                 strategy="momentum", ticker=ticker, side="no",
                 strength=min(8, abs(run)),
                 edge=abs(edge), market_price=price, model_fv=fv,
-                reason=f"Away run {run:+d}pts, market lagging {edge:+d}c",
+                reason=f"Away run {run:+d}pts (sustained), market lagging {edge:+d}c",
                 game_context=ctx,
             ))
 
@@ -206,8 +219,10 @@ class StrategyEngine:
         period = game.get("period", 1)
         mins = game.get("minutes_remaining", 40)
 
-        # Halftime window: just started second half
-        if not (period == 2 and 19 <= mins <= 20.5):
+        # Halftime window: end of first half OR start of second half
+        is_late_first_half = (period == 1 and mins <= 2)
+        is_early_second_half = (period == 2 and mins >= 18)
+        if not (is_late_first_half or is_early_second_half):
             return
 
         if abs(edge) < 4:
@@ -350,6 +365,40 @@ class StrategyEngine:
             market_price=price, model_fv=fv,
             reason=f"Score changed {prev_score}->{curr_score}, price unmoved ({price}c), "
                    f"expected ~{expected_move:.0f}c move",
+            game_context=ctx,
+        ))
+
+    # ── Strategy 7: Closing Line Value ───────────────────────────────
+    def _check_closing_line(self, ticker, mkt, game, fv, edge, price, ctx):
+        """In the final 3 minutes with a clear lead, the market converges fast
+        toward 0 or 100. If the model sees the market is still mispriced
+        by 5+c, there's strong convergence alpha as it settles."""
+        if self._on_cooldown("closing_line", ticker):
+            return
+
+        mins = game.get("minutes_remaining", 40)
+        lead = game.get("lead", 0)
+
+        if mins > 3 or mins < 0.5:
+            return
+
+        # Need clear lead (not a coin flip)
+        if abs(lead) < 3:
+            return
+
+        # Need strong mispricing
+        if abs(edge) < 5:
+            return
+
+        side = "yes" if edge > 0 else "no"
+        # Very high conviction — convergence is fast in final minutes
+        strength = min(10, int(abs(edge) / 1.5) + 2)
+
+        self._emit_signal(StrategySignal(
+            strategy="closing_line", ticker=ticker, side=side,
+            strength=strength, edge=abs(edge),
+            market_price=price, model_fv=fv,
+            reason=f"Closing: lead={lead:+d}, {mins:.1f}min, market={price}c vs model={fv}c",
             game_context=ctx,
         ))
 

@@ -381,26 +381,63 @@ class Orchestrator:
             self.log(f"Outside active window. Next session at {target.strftime('%I:%M %p EST')} "
                      f"({wait_hours:.1f} hours)")
 
+        # Write status during sleep so dashboard is always fresh
+        try:
+            write_status(self, next_session=target.strftime('%I:%M %p EST'))
+        except Exception:
+            pass
+
         # Sleep in chunks so we can catch KeyboardInterrupt
         sleep_chunk = min(300, wait_secs)  # 5 min chunks
         time.sleep(sleep_chunk)
 
     def _match_game_to_markets(self, game):
-        """Match an ESPN game to Kalshi markets using team abbreviations."""
+        """Match an ESPN game to Kalshi markets using team abbreviations and names.
+        Caches matches by espn_id for performance."""
+        espn_id = game.get("espn_id", "")
+
+        # Check cache first
+        if espn_id in self.game_market_cache:
+            cached = self.game_market_cache[espn_id]
+            # Return fresh market data for cached tickers
+            return [self.today_markets[t] for t in cached if t in self.today_markets]
+
         home_abbr = game["home"]["abbreviation"].upper()
         away_abbr = game["away"]["abbreviation"].upper()
         home_name = game["home"]["name"].upper()
         away_name = game["away"]["name"].upper()
+        # Also try short names (e.g., "MICHIGAN" from "Michigan Wolverines")
+        home_short = game["home"].get("shortDisplayName", "").upper()
+        away_short = game["away"].get("shortDisplayName", "").upper()
 
         matched = []
         for ticker, m in self.today_markets.items():
-            # Moneyline markets have team abbr in ticker
             ticker_upper = ticker.upper()
-            if home_abbr in ticker_upper or away_abbr in ticker_upper:
-                # Verify it's a game market (not spread/total)
+            title_upper = m.get("title", "").upper()
+
+            # Check ticker and title for team abbreviations/names
+            found = False
+            for team_id in [home_abbr, away_abbr]:
+                if team_id and len(team_id) >= 2 and team_id in ticker_upper:
+                    found = True
+                    break
+
+            if not found:
+                # Try matching against event/market title
+                for name in [home_name, away_name, home_short, away_short]:
+                    if name and len(name) >= 4 and name in title_upper:
+                        found = True
+                        break
+
+            if found:
                 series = m.get("series", "")
+                # Moneyline markets (game winner)
                 if "GAME" in series or "WINNER" in series:
                     matched.append(m)
+
+        # Cache the matched tickers
+        if matched:
+            self.game_market_cache[espn_id] = [m["ticker"] for m in matched]
 
         return matched
 

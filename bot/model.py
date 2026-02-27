@@ -26,13 +26,14 @@ def win_probability(lead, minutes_remaining, home=True, pregame_spread=0):
     # Time fraction remaining
     t_frac = minutes_remaining / GAME_LENGTH_MIN
 
+    # Home court advantage: add expected remaining advantage
+    home_drift = HOME_ADVANTAGE * t_frac if home else -HOME_ADVANTAGE * t_frac
+
     # Drift: expected points per minute remaining based on pre-game spread
-    # If pregame_spread is +5, we expect to outscore by 5 over the full game
-    # Remaining expected advantage = pregame_spread * t_frac (rough approximation)
     expected_remaining_margin = pregame_spread * t_frac
 
-    # Current effective lead including expected remaining drift
-    effective_lead = lead + expected_remaining_margin
+    # Current effective lead including expected remaining drift + home advantage
+    effective_lead = lead + expected_remaining_margin + home_drift
 
     # Standard deviation scales with sqrt of remaining time fraction
     sigma_remaining = SIGMA * math.sqrt(t_frac)

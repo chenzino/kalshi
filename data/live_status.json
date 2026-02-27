@@ -1,0 +1,22 @@
+{
+  "updated_at": 1772217483.4199486,
+  "updated_at_str": "01:38:03 PM EST",
+  "date": "2026-02-27",
+  "session_active": false,
+  "auth_ok": true,
+  "cycle_count": 0,
+  "next_session": "06:00 PM EST",
+  "balance_cents": 1471,
+  "balance": "$14.71",
+  "live_games": [],
+  "executor": {
+    "enabled": true,
+    "open_positions": 0,
+    "total_trades": 0,
+    "total_pnl": 0,
+    "positions": {}
+  },
+  "recent_signals": [],
+  "markets_tracked": 0,
+  "games_tracked": 0
+}
