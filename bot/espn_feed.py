@@ -2,7 +2,7 @@
 import requests
 import time
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 # groups=50 = ALL Division 1 (not just top 25/featured)
 ESPN_SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard?groups=50&limit=200"
@@ -233,3 +233,88 @@ def get_todays_schedule():
             })
 
     return schedule
+
+
+EST = timezone(timedelta(hours=-5))
+
+# Average CBB game length ~2 hours
+GAME_DURATION_HOURS = 2.5  # Buffer for OT, delays
+
+
+def _parse_game_window(data):
+    """Parse game window from ESPN scoreboard response.
+    Returns (wake_time, sleep_time, has_active) where has_active means
+    there are live or pre-game events."""
+    events = data.get("events", [])
+    if not events:
+        return None, None, False
+
+    start_times = []
+    has_live = False
+    has_pre = False
+
+    for event in events:
+        date_str = event.get("date", "")
+        state = event.get("competitions", [{}])[0].get(
+            "status", {}).get("type", {}).get("state", "")
+
+        if state == "in":
+            has_live = True
+        if state == "pre":
+            has_pre = True
+
+        if date_str:
+            try:
+                dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+                start_times.append(dt.astimezone(EST))
+            except Exception:
+                pass
+
+    if not start_times:
+        return None, None, False
+
+    earliest = min(start_times)
+    latest_start = max(start_times)
+
+    wake_time = earliest - timedelta(minutes=15)
+    sleep_time = latest_start + timedelta(hours=GAME_DURATION_HOURS, minutes=30)
+
+    return wake_time, sleep_time, (has_live or has_pre)
+
+
+def get_game_window():
+    """Get the next game window: (first_start, last_end) as EST datetimes.
+
+    Checks today's scoreboard first. If all games are over, checks tomorrow.
+    Returns (None, None) if no upcoming games found.
+    """
+    now = datetime.now(EST)
+
+    # Check today's scoreboard (default ESPN)
+    try:
+        resp = requests.get(ESPN_SCOREBOARD, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        wake, sleep, has_active = _parse_game_window(data)
+
+        # If there are live or upcoming games, use this window
+        if wake and has_active:
+            return wake, sleep
+    except Exception:
+        pass
+
+    # All today's games are done - check tomorrow
+    tomorrow = now + timedelta(days=1)
+    date_str = tomorrow.strftime("%Y%m%d")
+    try:
+        url = f"{ESPN_SCOREBOARD}&dates={date_str}"
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        wake, sleep, _ = _parse_game_window(data)
+        if wake:
+            return wake, sleep
+    except Exception:
+        pass
+
+    return None, None

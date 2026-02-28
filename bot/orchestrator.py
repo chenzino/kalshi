@@ -1,9 +1,8 @@
 """Main orchestrator for the Kalshi CBB trading system.
 
-Manages daily schedule:
-- 6:00 PM EST: Wake up, pre-game scan, load today's slate
-- 6:00 PM - 1:00 AM EST: Live monitoring, data capture, trading
-- 1:00 AM EST: Post-session analysis, strategy reports, sleep
+Dynamic schedule: checks ESPN for today's game times and auto-adjusts.
+Wakes 15 min before first game, sleeps 30 min after last game ends.
+Falls back to 11 AM - 1 AM EST if ESPN is unavailable.
 
 All times in EST (UTC-5).
 """
@@ -14,7 +13,7 @@ import traceback
 from datetime import datetime, timezone, timedelta
 
 from bot.market_scanner import run_full_scan, scan_live_markets, save_market_prices, save_scan
-from bot.espn_feed import get_live_games, get_todays_schedule
+from bot.espn_feed import get_live_games, get_todays_schedule, get_game_window
 from bot.model import win_probability, fair_value_cents, delta_per_point, mean_reversion_estimate
 from bot.data_logger import log_game_state, log_market_snapshot, get_session_stats
 from bot.strategy import StrategyEngine
@@ -26,9 +25,9 @@ from bot.event_log import log_event
 EST = timezone(timedelta(hours=-5))
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
 
-# Schedule (EST)
-WAKE_HOUR = 18    # 6 PM
-SLEEP_HOUR = 1    # 1 AM (next day)
+# Schedule (EST) - fallback if ESPN unavailable
+FALLBACK_WAKE_HOUR = 11    # 11 AM (Saturday games start early)
+FALLBACK_SLEEP_HOUR = 1    # 1 AM (next day)
 
 # Intervals (seconds)
 FULL_SCAN_INTERVAL = 300     # Full market scan every 5 min
@@ -45,12 +44,17 @@ def est_now():
     return datetime.now(EST)
 
 
-def is_active_window():
-    """Check if we're in the 6pm-1am EST window."""
+def is_active_window(wake_time=None, sleep_time=None):
+    """Check if we're in the active game window.
+    Uses dynamic schedule from ESPN if available, otherwise fallback."""
     now = est_now()
+
+    if wake_time and sleep_time:
+        return wake_time <= now <= sleep_time
+
+    # Fallback: use hardcoded hours
     hour = now.hour
-    # Active: 18:00 - 23:59 and 00:00 - 00:59
-    return hour >= WAKE_HOUR or hour < SLEEP_HOUR
+    return hour >= FALLBACK_WAKE_HOUR or hour < FALLBACK_SLEEP_HOUR
 
 
 class Orchestrator:
@@ -67,6 +71,9 @@ class Orchestrator:
         self.game_histories = {}  # espn_id -> list of snapshots
         self.auth_ok = False
         self.game_market_cache = {}  # espn_id -> list of matched tickers
+        self.wake_time = None        # Dynamic schedule from ESPN
+        self.sleep_time = None
+        self.last_schedule_check = 0
 
         # Try to load Kalshi client for authenticated ops
         try:
@@ -104,17 +111,42 @@ class Orchestrator:
             self.auth_ok = False
             return False
 
+    def _refresh_schedule(self):
+        """Check ESPN for today's game window. Refreshes every 10 min."""
+        now = time.time()
+        if now - self.last_schedule_check < 600:
+            return
+        self.last_schedule_check = now
+
+        wake, sleep = get_game_window()
+        if wake and sleep:
+            old_wake = self.wake_time
+            self.wake_time = wake
+            self.sleep_time = sleep
+            if old_wake != wake:
+                self.log(f"[SCHEDULE] Game window: {wake.strftime('%I:%M %p')} - {sleep.strftime('%I:%M %p')} EST")
+        else:
+            self.log("[SCHEDULE] No games found on ESPN, using fallback window")
+
     def run(self):
-        """Main loop - runs forever, active during 6pm-1am EST."""
+        """Main loop - runs forever, wakes dynamically based on ESPN schedule."""
         self.log("=== Kalshi CBB System Starting ===")
         self.check_auth()
         if not self.auth_ok:
             self.log("Auth not available - running in DATA COLLECTION mode")
-        self.log(f"Active window: {WAKE_HOUR}:00 - {SLEEP_HOUR}:00 EST")
+
+        # Initial schedule check
+        self._refresh_schedule()
+        if self.wake_time:
+            self.log(f"Today's window: {self.wake_time.strftime('%I:%M %p')} - {self.sleep_time.strftime('%I:%M %p')} EST")
+        else:
+            self.log(f"Fallback window: {FALLBACK_WAKE_HOUR}:00 - {FALLBACK_SLEEP_HOUR}:00 EST")
 
         while True:
             try:
-                if is_active_window():
+                self._refresh_schedule()
+
+                if is_active_window(self.wake_time, self.sleep_time):
                     if not self.session_start:
                         self._start_session()
                     self._active_cycle()
@@ -408,24 +440,21 @@ class Orchestrator:
     def _sleep_cycle(self):
         """Sleep until next active window."""
         now = est_now()
-        # Calculate time until 6 PM EST
-        target = now.replace(hour=WAKE_HOUR, minute=0, second=0, microsecond=0)
-        if now.hour >= SLEEP_HOUR:
-            # It's after 1 AM, wake at 6 PM today
-            pass
+
+        if self.wake_time and self.wake_time > now:
+            # Dynamic schedule: we know when to wake
+            target = self.wake_time
         else:
-            # Shouldn't happen but just in case
-            target = target - timedelta(days=1)
+            # Fallback: calculate next wake from hardcoded hours
+            target = now.replace(hour=FALLBACK_WAKE_HOUR, minute=0, second=0, microsecond=0)
+            if target <= now:
+                target += timedelta(days=1)
 
-        if target <= now:
-            target += timedelta(days=1)
-
-        wait_secs = (target - now).total_seconds()
+        wait_secs = max(0, (target - now).total_seconds())
         wait_hours = wait_secs / 3600
 
         if self.cycle_count == 0 or wait_hours > 1:
-            self.log(f"Outside active window. Next session at {target.strftime('%I:%M %p EST')} "
-                     f"({wait_hours:.1f} hours)")
+            self.log(f"Sleeping until {target.strftime('%I:%M %p EST')} ({wait_hours:.1f} hours)")
 
         # Write status during sleep so dashboard is always fresh
         try:
@@ -433,8 +462,12 @@ class Orchestrator:
         except Exception:
             pass
 
-        # Sleep in chunks so we can catch KeyboardInterrupt
-        sleep_chunk = min(300, wait_secs)  # 5 min chunks
+        # Sleep in short chunks: 60s if close to wake, 5 min otherwise
+        # Short chunks let _refresh_schedule() pick up new games
+        if wait_hours < 0.5:
+            sleep_chunk = 60
+        else:
+            sleep_chunk = min(300, wait_secs)
         time.sleep(sleep_chunk)
 
     def _match_game_to_markets(self, game):
