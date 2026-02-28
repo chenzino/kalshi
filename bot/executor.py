@@ -287,12 +287,13 @@ class Executor:
             del self.positions[t]
 
     def _exit_position(self, ticker, pos, exit_price, reason, pnl):
-        """Close position by selling same side."""
+        """Close position by selling same side at market."""
         try:
-            # Sell our position at market to guarantee exit
+            # Sell at floor price (1c) to get immediate fill like a market order
+            price_arg = {"yes_price": 1} if pos.side == "yes" else {"no_price": 1}
             self.client.create_order(
-                ticker=ticker, side=pos.side, action="sell", type="market",
-                count=MAX_CONTRACTS,
+                ticker=ticker, side=pos.side, action="sell", type="limit",
+                count=MAX_CONTRACTS, **price_arg,
             )
         except Exception as e:
             self.log(f"[TRADE] EXIT FAILED {ticker}: {e}")
