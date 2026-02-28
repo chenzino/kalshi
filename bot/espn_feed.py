@@ -285,29 +285,43 @@ def _parse_game_window(data):
 def get_game_window():
     """Get the next game window: (first_start, last_end) as EST datetimes.
 
-    Checks today's scoreboard first. If all games are over, checks tomorrow.
+    Checks multiple dates to handle ESPN's scoreboard rollover timing:
+    1. Default scoreboard (may still show yesterday late at night)
+    2. Today with explicit date
+    3. Tomorrow if all today's games are done
     Returns (None, None) if no upcoming games found.
     """
     now = datetime.now(EST)
 
-    # Check today's scoreboard (default ESPN)
+    # Check default scoreboard first (usually today, but lags near midnight)
     try:
         resp = requests.get(ESPN_SCOREBOARD, timeout=10)
         resp.raise_for_status()
         data = resp.json()
         wake, sleep, has_active = _parse_game_window(data)
-
-        # If there are live or upcoming games, use this window
         if wake and has_active:
+            return wake, sleep
+    except Exception:
+        pass
+
+    # Check today with explicit date (handles midnight rollover gap)
+    today_str = now.strftime("%Y%m%d")
+    try:
+        url = f"{ESPN_SCOREBOARD}&dates={today_str}"
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        wake, sleep, has_active = _parse_game_window(data)
+        if wake and (has_active or (sleep and sleep > now)):
             return wake, sleep
     except Exception:
         pass
 
     # All today's games are done - check tomorrow
     tomorrow = now + timedelta(days=1)
-    date_str = tomorrow.strftime("%Y%m%d")
+    tmrw_str = tomorrow.strftime("%Y%m%d")
     try:
-        url = f"{ESPN_SCOREBOARD}&dates={date_str}"
+        url = f"{ESPN_SCOREBOARD}&dates={tmrw_str}"
         resp = requests.get(url, timeout=10)
         resp.raise_for_status()
         data = resp.json()
