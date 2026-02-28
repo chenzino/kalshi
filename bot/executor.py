@@ -20,19 +20,19 @@ DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
 EST = timezone(timedelta(hours=-5))
 
 # ── Execution Parameters ──────────────────────────────────────
-MAX_CONTRACTS = 1      # Contracts per order (keep at 1, scale via repeat entries)
-MAX_COST_CENTS = 95
-MIN_SIGNAL_STRENGTH = 5  # Lowered from 6 to get more trades for learning
-MAX_POSITIONS = 5      # Up from 3 - spread across multiple games
+MAX_CONTRACTS = 1      # Contracts per order
+MAX_COST_CENTS = 85    # Don't pay more than 85c per contract
+MIN_SIGNAL_STRENGTH = 5
+MAX_POSITIONS = 8      # Spread across many games on Saturday (80+ slate)
 MIN_EDGE = 3           # Min edge (cents) to enter
-ORDER_TIMEOUT = 60     # Cancel unfilled after 60s
+ORDER_TIMEOUT = 45     # Cancel unfilled after 45s (was 60)
 STOP_LOSS = 5          # Hard stop at -5c
-TAKE_PROFIT = 5        # Hard take at +5c
+TAKE_PROFIT = 8        # Raised from 5 - avg win was +14c, let winners breathe
 TIME_EXIT = 300        # 5 min max hold
 EDGE_EXIT = -1         # Exit when model edge flips to -1c
 FILL_CHECK_INTERVAL = 15  # Check fills every 15s
-TICKER_COOLDOWN = 120  # 2 min between trades on same ticker (was 3)
-GAME_COOLDOWN = 30     # 30s between trades on same game event (was 60)
+TICKER_COOLDOWN = 60   # 1 min between trades on same ticker (was 2)
+GAME_COOLDOWN = 20     # 20s between trades on same game event (was 30)
 
 
 class Position:
@@ -54,6 +54,7 @@ class Position:
         self.last_fill_check = 0
         self.edge_updates = 0  # Count of model updates received
         self.game_event = _extract_game_event(ticker)
+        self.peak_pnl = 0     # High water mark for trailing stop
 
     def to_dict(self):
         return {
@@ -288,19 +289,27 @@ class Executor:
                 current = 100 - current_yes
             pnl = current - pos.entry_price
 
+            # Track high water mark for trailing stop
+            if pnl > pos.peak_pnl:
+                pos.peak_pnl = pnl
+
             # 1. MODEL EXIT: edge has flipped (model says we're wrong now)
             if pos.edge_updates >= 2 and pos.last_edge <= EDGE_EXIT:
                 self._exit_position(ticker, pos, current, "model_exit", pnl)
                 to_close.append(ticker)
-            # 2. TAKE PROFIT: lock in gains
+            # 2. TAKE PROFIT: hard ceiling
             elif pnl >= TAKE_PROFIT:
                 self._exit_position(ticker, pos, current, "take_profit", pnl)
                 to_close.append(ticker)
-            # 3. STOP LOSS: cut losses
+            # 3. TRAILING STOP: once we're up 4c+, don't give back more than 3c
+            elif pos.peak_pnl >= 4 and pnl <= pos.peak_pnl - 3:
+                self._exit_position(ticker, pos, current, "trailing_stop", pnl)
+                to_close.append(ticker)
+            # 4. STOP LOSS: cut losses
             elif pnl <= -STOP_LOSS:
                 self._exit_position(ticker, pos, current, "stop_loss", pnl)
                 to_close.append(ticker)
-            # 4. TIME EXIT: don't hold longer than 5 min
+            # 5. TIME EXIT: don't hold longer than 5 min
             elif age > TIME_EXIT:
                 self._exit_position(ticker, pos, current, "time_exit", pnl)
                 to_close.append(ticker)

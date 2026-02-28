@@ -32,7 +32,7 @@ SLEEP_HOUR = 1    # 1 AM (next day)
 
 # Intervals (seconds)
 FULL_SCAN_INTERVAL = 300     # Full market scan every 5 min
-LIVE_POLL_INTERVAL = 15      # Live game poll every 15s
+LIVE_POLL_INTERVAL = 10      # Live game poll every 10s (faster exit detection)
 PRICE_SNAP_INTERVAL = 30     # Price snapshot every 30s during games
 ESPN_POLL_INTERVAL = 15      # ESPN poll every 15s
 

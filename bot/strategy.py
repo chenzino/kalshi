@@ -126,6 +126,11 @@ class StrategyEngine:
         if mins < 2 or mins > 38:  # Skip very end (closing_line handles) and very start
             return
 
+        # Skip games with huge pregame spreads - model unreliable there
+        spread = game.get("pregame_spread", 0)
+        if abs(spread) > 8:
+            return
+
         if abs(edge) < 4 or abs(edge) > 20:
             return  # Skip tiny edges AND suspiciously large ones (model error)
 
@@ -202,8 +207,13 @@ class StrategyEngine:
         if not is_halftime:
             return
 
-        if abs(edge) < 4:
+        # Skip big spreads - model unreliable, halftime_edge was -16c tonight on these
+        spread = game.get("pregame_spread", 0)
+        if abs(spread) > 8:
             return
+
+        if abs(edge) < 4 or abs(edge) > 15:
+            return  # Cap at 15c - larger is model error
 
         side = "yes" if edge > 0 else "no"
         strength = min(10, int(abs(edge) / 1.5))

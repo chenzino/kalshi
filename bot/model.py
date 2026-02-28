@@ -4,7 +4,7 @@ from scipy.stats import norm
 
 # College basketball parameters (from research)
 GAME_LENGTH_MIN = 40  # 40 minutes of game time
-SIGMA = 11.0  # KenPom standard deviation for final margin
+SIGMA = 12.0  # Standard deviation for final margin (11 too tight for mid-majors)
 HOME_ADVANTAGE = 3.5  # Average home court advantage in points
 
 def win_probability(lead, minutes_remaining, home=True, pregame_spread=0):
@@ -31,7 +31,16 @@ def win_probability(lead, minutes_remaining, home=True, pregame_spread=0):
     # Only add HOME_ADVANTAGE when we don't have a real pregame spread
     if pregame_spread != 0:
         # Pregame spread already includes home court, use directly
-        expected_remaining_margin = pregame_spread * t_frac
+        # Dampen large spreads: model over-applies drift for big mismatches
+        # Small spreads (±4) are reliable. Large spreads have more model error.
+        abs_spread = abs(pregame_spread)
+        if abs_spread <= 4:
+            dampen = 1.0
+        elif abs_spread <= 8:
+            dampen = 1.0 - 0.1 * (abs_spread - 4)  # 1.0 → 0.6 linearly
+        else:
+            dampen = 0.5  # Hard cap at 50% for very large spreads
+        expected_remaining_margin = pregame_spread * t_frac * dampen
     else:
         # No pregame spread available, use home court as proxy
         home_drift = HOME_ADVANTAGE * t_frac if home else -HOME_ADVANTAGE * t_frac
