@@ -1,7 +1,7 @@
 """Trade execution engine for short-term volatility scalping.
 
-Position sizing: target 10% of bankroll per position (aggressive).
-Scales automatically as balance grows. Cheap contracts = more, expensive = fewer.
+Position sizing: YOLO mode - 90% of bankroll per trade, 1 trade at a time.
+Full send on highest conviction signal. Scales with balance.
 All P&L measured as % return on capital deployed.
 
 Exit rules (adaptive, learned from past trades):
@@ -22,11 +22,11 @@ DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
 EST = timezone(timedelta(hours=-5))
 
 # ── Execution Parameters ──────────────────────────────────────
-TARGET_BANKROLL_PCT = 10    # Target 10% of bankroll per position - aggressive
+TARGET_BANKROLL_PCT = 90    # YOLO - nearly full bankroll per trade
 MIN_ENTRY_PRICE = 20        # Market price must be 20-80c
 MAX_COST_CENTS = 81         # Don't pay more than 81c per contract (80c + 1c spread)
 MIN_SIGNAL_STRENGTH = 5
-MAX_POSITIONS = 5           # Fewer, higher-conviction positions
+MAX_POSITIONS = 1           # ONE trade at a time - full focus
 MIN_EDGE = 6                # Min edge (cents) to enter - need room for fees + spread
 MAX_EDGE = 18               # Max edge - beyond this model is wrong, not right
 MIN_MINUTES_REMAINING = 8   # No new trades under 8 min left in 2nd half
@@ -124,12 +124,11 @@ def _extract_game_event(ticker):
 
 
 def _calc_contracts(price_cents, target_cents):
-    """Calculate how many contracts to buy for consistent position sizing.
-    Cheap = more contracts, expensive = 1. Cap at 3."""
+    """Calculate how many contracts to buy — YOLO mode, no cap.
+    Full bankroll divided by price."""
     if price_cents <= 0 or target_cents <= 0:
         return 1
-    n = max(1, round(target_cents / price_cents))
-    return min(n, 5)  # Up to 5 contracts for cheap ones
+    return max(1, int(target_cents / price_cents))
 
 
 def _load_tuned_exits():
@@ -186,8 +185,6 @@ class Executor:
             self._bankroll_ts = now
             # Target position = 6% of bankroll
             self._target_position = max(30, round(self._bankroll * TARGET_BANKROLL_PCT / 100))
-            # Don't exceed 150c per position even with large bankroll
-            self._target_position = min(self._target_position, 150)
         except Exception:
             pass
 
@@ -276,10 +273,10 @@ class Executor:
         self._refresh_bankroll()
         contracts = _calc_contracts(unit_price, self._target_position)
 
-        # Don't risk more than total exposure limit (60% of bankroll)
+        # Don't risk more than total exposure limit (95% of bankroll - YOLO)
         current_exposure = sum(p.total_cost for p in self.positions.values())
         new_exposure = unit_price * contracts
-        max_exposure = self._bankroll * 0.60 if self._bankroll > 0 else 500
+        max_exposure = self._bankroll * 0.95 if self._bankroll > 0 else 500
         if current_exposure + new_exposure > max_exposure:
             return
 
