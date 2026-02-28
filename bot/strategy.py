@@ -123,7 +123,7 @@ class StrategyEngine:
             return
 
         mins = game.get("minutes_remaining", 40)
-        if mins < 2 or mins > 38:  # Skip very end (closing_line handles) and very start
+        if mins < 8 or mins > 35:  # 8min floor (no late-game), 35min ceiling (let game develop)
             return
 
         # Skip games with huge pregame spreads - model unreliable there
@@ -131,8 +131,8 @@ class StrategyEngine:
         if abs(spread) > 8:
             return
 
-        if abs(edge) < 4 or abs(edge) > 20:
-            return  # Skip tiny edges AND suspiciously large ones (model error)
+        if abs(edge) < 6 or abs(edge) > 18:
+            return  # Need 6c+ to cover fees, cap at 18c (model error beyond that)
 
         # Need price history to confirm edge is persistent (not just noise)
         # Require at least 3 readings to avoid dumping on startup
@@ -228,20 +228,20 @@ class StrategyEngine:
 
     # ── Strategy 4: Gamma Scalp ──────────────────────────────────
     def _check_gamma_scalp(self, ticker, mkt, game, fv, edge, price, ctx):
-        """Final minutes of close games: 1 basket = 5-15c price swing.
-        Small edge + high delta = asymmetric payoff."""
+        """Close games with 8-15 min left where each basket = big price swing.
+        Needs real edge + high delta."""
         if self._on_cooldown("gamma_scalp", ticker):
             return
 
         mins = game.get("minutes_remaining", 40)
         lead = game.get("lead", 0)
 
-        if mins > 8 or mins < 1:
+        if mins > 15 or mins < 8:  # 8-15 min window only
             return
 
         delta = delta_per_point(lead, mins)
 
-        if abs(delta) < 0.04 or abs(lead) > 8 or abs(edge) < 3 or abs(edge) > 15:
+        if abs(delta) < 0.04 or abs(lead) > 6 or abs(edge) < 6 or abs(edge) > 15:
             return
 
         side = "yes" if edge > 0 else "no"
@@ -257,9 +257,13 @@ class StrategyEngine:
 
     # ── Strategy 5: Stale Line ───────────────────────────────────
     def _check_stale_line(self, ticker, mkt, game, fv, edge, price, ctx):
-        """Score changed but market price didn't move. Free money."""
+        """Score changed but market price didn't move. Only in mid-game."""
         if self._on_cooldown("stale_line", ticker):
             return
+
+        mins = game.get("minutes_remaining", 40)
+        if mins < 8 or mins > 35:
+            return  # 8 min floor, no late-game stale lines
 
         espn_id = game.get("espn_id", "")
         history = self.game_states.get(espn_id, [])
@@ -280,12 +284,11 @@ class StrategyEngine:
         if abs(price - prev_price) > 2:
             return  # Market already moved
 
-        mins = game.get("minutes_remaining", 40)
         lead = game.get("lead", 0)
         expected_move = abs(delta_per_point(lead, mins)) * abs(curr_total - prev_total) * 100
 
-        if expected_move < 3 or abs(edge) < 3:
-            return
+        if expected_move < 3 or abs(edge) < 6 or abs(edge) > 18:
+            return  # 6c min edge, 18c max (model error beyond that)
 
         side = "yes" if edge > 0 else "no"
         strength = min(9, int(expected_move / 2) + 2)
@@ -300,16 +303,8 @@ class StrategyEngine:
 
     # ── Strategy 6: Closing Line ─────────────────────────────────
     def _check_closing_line(self, ticker, mkt, game, fv, edge, price, ctx):
-        """Final 3 min with a lead: market converges fast to 0/100.
-        If still mispriced by 5+c, strong convergence alpha."""
-        if self._on_cooldown("closing_line", ticker):
-            return
-
-        mins = game.get("minutes_remaining", 40)
-        lead = game.get("lead", 0)
-
-        if mins > 3 or mins < 0.5 or abs(lead) < 3 or abs(edge) < 5:
-            return
+        """Disabled - executor blocks trades under 8 min remaining."""
+        return  # No new entries in final minutes
 
         side = "yes" if edge > 0 else "no"
         strength = min(10, int(abs(edge) / 1.5) + 2)

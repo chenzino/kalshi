@@ -22,13 +22,13 @@ DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
 EST = timezone(timedelta(hours=-5))
 
 # ── Execution Parameters ──────────────────────────────────────
-TARGET_BANKROLL_PCT = 6     # Target 6% of bankroll per position
+TARGET_BANKROLL_PCT = 10    # Target 10% of bankroll per position - aggressive
 MIN_ENTRY_PRICE = 25        # Don't buy contracts below 25c (gaps kill you)
 MAX_COST_CENTS = 75         # Don't pay more than 75c per contract
 MIN_SIGNAL_STRENGTH = 5
 MAX_POSITIONS = 5           # Fewer, higher-conviction positions
-MIN_EDGE = 4                # Min edge (cents) to enter
-MAX_EDGE = 20               # Max edge - beyond this model is wrong, not right
+MIN_EDGE = 6                # Min edge (cents) to enter - need room for fees + spread
+MAX_EDGE = 18               # Max edge - beyond this model is wrong, not right
 MIN_MINUTES_REMAINING = 8   # No new trades under 8 min left in 2nd half
 ORDER_TIMEOUT = 45          # Cancel unfilled after 45s
 FILL_CHECK_INTERVAL = 15
@@ -129,7 +129,7 @@ def _calc_contracts(price_cents, target_cents):
     if price_cents <= 0 or target_cents <= 0:
         return 1
     n = max(1, round(target_cents / price_cents))
-    return min(n, 3)
+    return min(n, 5)  # Up to 5 contracts for cheap ones
 
 
 def _load_tuned_exits():
@@ -276,10 +276,10 @@ class Executor:
         self._refresh_bankroll()
         contracts = _calc_contracts(unit_price, self._target_position)
 
-        # Don't risk more than total exposure limit (48% of bankroll)
+        # Don't risk more than total exposure limit (60% of bankroll)
         current_exposure = sum(p.total_cost for p in self.positions.values())
         new_exposure = unit_price * contracts
-        max_exposure = self._bankroll * 0.48 if self._bankroll > 0 else 500
+        max_exposure = self._bankroll * 0.60 if self._bankroll > 0 else 500
         if current_exposure + new_exposure > max_exposure:
             return
 
