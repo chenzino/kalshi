@@ -129,13 +129,15 @@ class StrategyEngine:
         if abs(edge) < 4:
             return
 
-        # Need some price history to confirm edge is persistent (not just noise)
+        # Need price history to confirm edge is persistent (not just noise)
+        # Require at least 3 readings to avoid dumping on startup
         history = self.edge_history.get(ticker, [])
-        if len(history) >= 3:
-            recent_edges = [h[3] for h in history[-3:]]
-            # Edge should be consistently in same direction
-            if not all(e > 0 for e in recent_edges) and not all(e < 0 for e in recent_edges):
-                return
+        if len(history) < 3:
+            return  # Wait for warmup
+        recent_edges = [h[3] for h in history[-3:]]
+        # Edge should be consistently in same direction
+        if not all(e > 0 for e in recent_edges) and not all(e < 0 for e in recent_edges):
+            return
 
         side = "yes" if edge > 0 else "no"
         strength = min(10, int(abs(edge) / 2) + 3)
