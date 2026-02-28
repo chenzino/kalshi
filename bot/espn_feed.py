@@ -26,9 +26,10 @@ def _fetch_pickcenter(game_id):
         pc = data.get("pickcenter", [])
         if pc:
             spread_val = pc[0].get("spread", 0)
-            away_fav = pc[0].get("awayTeamOdds", {}).get("favorite", False)
-            # Convention: positive = home favored
-            pregame_spread = -spread_val if away_fav else spread_val
+            # ESPN spread is negative for the favorite (e.g. -12.5 = favored by 12.5)
+            # Our convention: positive = home favored
+            # ESPN spread is from home perspective, so negate to get our convention
+            pregame_spread = -spread_val
             _pickcenter_cache[game_id] = {
                 "spread": pregame_spread,
                 "details": pc[0].get("details", ""),

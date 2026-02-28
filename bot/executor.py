@@ -28,7 +28,8 @@ MAX_COST_CENTS = 75         # Don't pay more than 75c per contract
 MIN_SIGNAL_STRENGTH = 5
 MAX_POSITIONS = 5           # Fewer, higher-conviction positions
 MIN_EDGE = 4                # Min edge (cents) to enter
-MAX_EDGE = 25               # Max edge - beyond this model is wrong, not right
+MAX_EDGE = 20               # Max edge - beyond this model is wrong, not right
+MIN_MINUTES_REMAINING = 8   # No new trades under 8 min left in 2nd half
 ORDER_TIMEOUT = 45          # Cancel unfilled after 45s
 FILL_CHECK_INTERVAL = 15
 TICKER_COOLDOWN = 120       # 2 min between trades on same ticker
@@ -225,6 +226,12 @@ class Executor:
 
         # Edge sanity: too-large edge means model is wrong, not a real opportunity
         if edge > MAX_EDGE:
+            return
+
+        # Time cutoff: no new entries under 8 min remaining
+        ctx = signal.get("game_context", {})
+        mins_left = ctx.get("minutes_remaining", 40)
+        if mins_left < MIN_MINUTES_REMAINING:
             return
 
         # Strict series check - ONLY men's full-game moneyline
