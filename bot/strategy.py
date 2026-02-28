@@ -126,8 +126,8 @@ class StrategyEngine:
         if mins < 2 or mins > 38:  # Skip very end (closing_line handles) and very start
             return
 
-        if abs(edge) < 4:
-            return
+        if abs(edge) < 4 or abs(edge) > 20:
+            return  # Skip tiny edges AND suspiciously large ones (model error)
 
         # Need price history to confirm edge is persistent (not just noise)
         # Require at least 3 readings to avoid dumping on startup
@@ -231,7 +231,7 @@ class StrategyEngine:
 
         delta = delta_per_point(lead, mins)
 
-        if abs(delta) < 0.04 or abs(lead) > 8 or abs(edge) < 2:
+        if abs(delta) < 0.04 or abs(lead) > 8 or abs(edge) < 3 or abs(edge) > 15:
             return
 
         side = "yes" if edge > 0 else "no"

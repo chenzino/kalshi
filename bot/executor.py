@@ -156,15 +156,19 @@ class Executor:
         if now - self.recent_events.get(game_event, 0) < GAME_COOLDOWN:
             return
 
-        # Gate: price sanity
-        if market_price is None or market_price < 5 or market_price > 95:
+        # Gate: price sanity - avoid extreme prices with bad risk/reward
+        if market_price is None or market_price < 10 or market_price > 90:
             return
 
-        # Calculate limit price (1c above bid to get filled as maker)
+        # Calculate our cost
         if side == "yes":
             our_price = min(market_price + 1, MAX_COST_CENTS)
         else:
             our_price = min(100 - market_price + 1, MAX_COST_CENTS)
+
+        # Gate: don't pay more than 85c (risk/reward gets awful)
+        if our_price > 85:
+            return
 
         # Fee check (~1c each way conservative)
         if edge - 2 < 1:
