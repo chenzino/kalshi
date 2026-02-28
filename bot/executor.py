@@ -255,8 +255,13 @@ class Executor:
                 continue
 
             # ── EXIT RULES (priority order) ──
-            current = current_prices.get(ticker, pos.entry_price)
-            pnl = (current - pos.entry_price) if pos.side == "yes" else (pos.entry_price - current)
+            current_yes = current_prices.get(ticker, pos.entry_price)
+            # Convert to position-side value: YES price stays, NO value = 100 - YES price
+            if pos.side == "yes":
+                current = current_yes
+            else:
+                current = 100 - current_yes
+            pnl = current - pos.entry_price
 
             # 1. MODEL EXIT: edge has flipped (model says we're wrong now)
             if pos.edge_updates >= 2 and pos.last_edge <= EDGE_EXIT:
@@ -282,12 +287,11 @@ class Executor:
             del self.positions[t]
 
     def _exit_position(self, ticker, pos, exit_price, reason, pnl):
-        """Close position. Try limit first, fallback to market."""
-        close_side = "no" if pos.side == "yes" else "yes"
+        """Close position by selling same side."""
         try:
-            # Sell at market to guarantee exit (speed > price for scalping)
+            # Sell our position at market to guarantee exit
             self.client.create_order(
-                ticker=ticker, side=close_side, type="market",
+                ticker=ticker, side=pos.side, action="sell", type="market",
                 count=MAX_CONTRACTS,
             )
         except Exception as e:

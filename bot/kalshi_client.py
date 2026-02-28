@@ -88,11 +88,11 @@ class KalshiClient:
         return self.get(f"/markets/{ticker}/trades", params=params)
 
     # === Orders ===
-    def create_order(self, ticker, side, type="limit", count=1, yes_price=None, no_price=None,
+    def create_order(self, ticker, side, action="buy", type="limit", count=1, yes_price=None, no_price=None,
                      expiration_ts=None, sell_position_floor=None, buy_max_cost=None):
         body = {
             "ticker": ticker,
-            "action": "buy",
+            "action": action,
             "side": side,
             "type": type,
             "count": count,
