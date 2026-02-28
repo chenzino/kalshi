@@ -1,15 +1,15 @@
 """Trade execution engine for short-term volatility scalping.
 
-Position sizing: target 6% of bankroll per position.
+Position sizing: target 10% of bankroll per position (aggressive).
 Scales automatically as balance grows. Cheap contracts = more, expensive = fewer.
 All P&L measured as % return on capital deployed.
 
 Exit rules (adaptive, learned from past trades):
 1. Model exit: edge flipped, get out
-2. Take profit: default +15% return (adjusted by learner)
-3. Trailing stop: gave back 5% from peak (adjusted by learner)
-4. Stop loss: default -10% return (adjusted by learner)
-5. Time exit: 5 min max hold (adjusted by learner)
+2. Take profit: +3% return - scalp fast, take profits
+3. Trailing stop: gave back 2% from peak
+4. Stop loss: -15% return
+5. Time exit: 5 min HARD max - sell regardless after 5 min
 """
 import time
 import json
@@ -23,8 +23,8 @@ EST = timezone(timedelta(hours=-5))
 
 # ── Execution Parameters ──────────────────────────────────────
 TARGET_BANKROLL_PCT = 10    # Target 10% of bankroll per position - aggressive
-MIN_ENTRY_PRICE = 25        # Don't buy contracts below 25c (gaps kill you)
-MAX_COST_CENTS = 75         # Don't pay more than 75c per contract
+MIN_ENTRY_PRICE = 20        # Market price must be 20-80c
+MAX_COST_CENTS = 81         # Don't pay more than 81c per contract (80c + 1c spread)
 MIN_SIGNAL_STRENGTH = 5
 MAX_POSITIONS = 5           # Fewer, higher-conviction positions
 MIN_EDGE = 6                # Min edge (cents) to enter - need room for fees + spread
@@ -39,10 +39,10 @@ MAX_LOSS_PER_CONTRACT = 8   # Absolute cent cap on loss per contract
 # ── Default Exit Parameters (overridden by adaptive tuner) ────
 DEFAULT_EXITS = {
     "stop_loss_pct": 15,        # -15% of capital (wider to survive noise)
-    "take_profit_pct": 15,      # +15% of capital deployed
-    "trailing_stop_pct": 5,     # Give back at most 5% from peak
-    "trailing_activate_pct": 8, # Trailing stop kicks in at +8%
-    "time_exit": 300,           # 5 min max hold
+    "take_profit_pct": 3,       # +3% of capital deployed - scalp fast, take profits
+    "trailing_stop_pct": 2,     # Give back at most 2% from peak (tighter for 3% TP)
+    "trailing_activate_pct": 2, # Trailing stop kicks in at +2%
+    "time_exit": 300,           # 5 min HARD max hold - sell regardless
     "edge_exit": -1,            # Exit when model edge flips to -1c
 }
 
@@ -567,8 +567,8 @@ class Executor:
         if len(tps) >= 3:
             avg_peak = sum(t.get("peak_pnl_pct", 0) for t in tps) / len(tps)
             avg_exit = sum(t["pnl_pct"] for t in tps) / len(tps)
-            if avg_peak > avg_exit + 5 and new_exits["take_profit_pct"] < 30:
-                new_exits["take_profit_pct"] = min(30, new_exits["take_profit_pct"] + 3)
+            if avg_peak > avg_exit + 5 and new_exits["take_profit_pct"] < 8:
+                new_exits["take_profit_pct"] = min(8, new_exits["take_profit_pct"] + 1)
                 changed = True
                 self.log(f"[TUNE] Raised take profit to +{new_exits['take_profit_pct']}% "
                          f"(avg peak was {avg_peak:.1f}% vs exit {avg_exit:.1f}%)")
@@ -577,8 +577,8 @@ class Executor:
         time_exits = by_reason.get("time_exit", [])
         if len(time_exits) >= 3:
             avg_pnl = sum(t["pnl_pct"] for t in time_exits) / len(time_exits)
-            if avg_pnl > 2 and new_exits["time_exit"] < 600:
-                new_exits["time_exit"] = min(600, new_exits["time_exit"] + 60)
+            if avg_pnl > 2 and new_exits["time_exit"] < 300:
+                new_exits["time_exit"] = min(300, new_exits["time_exit"] + 30)
                 changed = True
                 self.log(f"[TUNE] Extended time exit to {new_exits['time_exit']}s "
                          f"(time exits avg +{avg_pnl:.1f}%)")
