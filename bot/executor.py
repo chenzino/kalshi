@@ -92,6 +92,27 @@ class Executor:
         self.enabled = True
         self.recent_tickers = {}  # ticker -> last_trade_time
         self.recent_events = {}   # game_event -> last_trade_time
+        self._known_kalshi_tickers = set()  # Tickers with existing Kalshi positions
+        self._load_existing_positions()
+
+    def _load_existing_positions(self):
+        """Load existing Kalshi positions on startup to prevent duplicates."""
+        if not self.client:
+            return
+        try:
+            pos = self.client.get_positions()
+            for p in pos.get("market_positions", []):
+                position = p.get("position", 0)
+                if position != 0:
+                    ticker = p["ticker"]
+                    self._known_kalshi_tickers.add(ticker)
+                    game_event = _extract_game_event(ticker)
+                    self.recent_events[game_event] = time.time()
+                    self.recent_tickers[ticker] = time.time()
+            if self._known_kalshi_tickers:
+                self.log(f"[EXEC] Found {len(self._known_kalshi_tickers)} existing positions on Kalshi")
+        except Exception as e:
+            self.log(f"[EXEC] Could not load existing positions: {e}")
 
     def on_signal(self, signal):
         """Evaluate a strategy signal for execution."""
@@ -116,8 +137,8 @@ class Executor:
         if len(self.positions) >= MAX_POSITIONS:
             return
 
-        # Gate: no doubling up on same ticker
-        if ticker in self.positions:
+        # Gate: no doubling up on same ticker (in-memory or on Kalshi)
+        if ticker in self.positions or ticker in self._known_kalshi_tickers:
             return
 
         # Gate: max 1 position per game event at a time (don't trade both sides)
