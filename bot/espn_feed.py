@@ -4,7 +4,8 @@ import time
 import json
 from datetime import datetime, timezone
 
-ESPN_SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard"
+# groups=50 = ALL Division 1 (not just top 25/featured)
+ESPN_SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard?groups=50&limit=200"
 ESPN_GAME = "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/summary"
 
 
