@@ -8,6 +8,40 @@ from datetime import datetime, timezone
 ESPN_SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard?groups=50&limit=200"
 ESPN_GAME = "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/summary"
 
+# Cache pickcenter data per game (fetched once from summary endpoint)
+_pickcenter_cache = {}  # espn_id -> {"spread": float, "fetched": timestamp}
+
+
+def _fetch_pickcenter(game_id):
+    """Fetch pregame spread from ESPN game summary (pickcenter).
+    The scoreboard endpoint doesn't include odds for non-featured games,
+    but the per-game summary endpoint has pickcenter data from DraftKings."""
+    if game_id in _pickcenter_cache:
+        return _pickcenter_cache[game_id].get("spread", 0)
+
+    try:
+        resp = requests.get(ESPN_GAME, params={"event": game_id}, timeout=8)
+        resp.raise_for_status()
+        data = resp.json()
+        pc = data.get("pickcenter", [])
+        if pc:
+            spread_val = pc[0].get("spread", 0)
+            away_fav = pc[0].get("awayTeamOdds", {}).get("favorite", False)
+            # Convention: positive = home favored
+            pregame_spread = -spread_val if away_fav else spread_val
+            _pickcenter_cache[game_id] = {
+                "spread": pregame_spread,
+                "details": pc[0].get("details", ""),
+                "over_under": pc[0].get("overUnder", 0),
+                "fetched": time.time(),
+            }
+            return pregame_spread
+    except Exception:
+        pass
+
+    _pickcenter_cache[game_id] = {"spread": 0, "fetched": time.time()}
+    return 0
+
 
 def _parse_odds(competition):
     """Extract DraftKings odds from ESPN competition data."""
@@ -24,12 +58,9 @@ def _parse_odds(competition):
         # Determine which team is favored
         away_fav = odds.get("awayTeamOdds", {}).get("favorite", False)
         if away_fav:
-            # Away team is favored by spread_val points
-            # Home spread = +spread_val (they're underdogs)
             result["home_spread"] = spread_val  # positive = underdog
             result["away_spread"] = -spread_val
         else:
-            # Home team favored
             result["home_spread"] = -spread_val
             result["away_spread"] = spread_val
 
@@ -111,20 +142,23 @@ def _parse_game(event, state_filter=None):
     else:
         minutes_remaining = mins + secs / 60
 
-    # Parse odds/lines from ESPN (DraftKings)
+    # Parse odds/lines from ESPN scoreboard data (DraftKings)
     odds = _parse_odds(competition)
 
     # Pregame spread: positive = home favored
-    # ESPN gives spread from favorite perspective, convert to home-relative
     pregame_spread = 0
     if "home_spread_line" in odds:
-        # home_spread_line is from home team's perspective (negative = favored)
-        pregame_spread = -odds["home_spread_line"]  # Flip: now positive = home favored
+        pregame_spread = -odds["home_spread_line"]
     elif "home_spread" in odds:
         pregame_spread = -odds["home_spread"]
 
+    # If scoreboard didn't include odds, try pickcenter from summary endpoint
+    game_id = event.get("id")
+    if pregame_spread == 0 and game_id and state == "in":
+        pregame_spread = _fetch_pickcenter(game_id)
+
     game = {
-        "espn_id": event.get("id"),
+        "espn_id": game_id,
         "name": f"{away['name']} @ {home['name']}",
         "home": home,
         "away": away,
