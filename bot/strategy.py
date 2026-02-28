@@ -24,12 +24,12 @@ EST = timezone(timedelta(hours=-5))
 
 # Cooldowns: seconds between signals for same (strategy, ticker) pair
 COOLDOWNS = {
-    "edge_scalp": 120,       # 2 min - core strategy, trade often
-    "momentum": 90,          # 1.5 min
-    "halftime_edge": 300,    # 5 min (once per halftime)
-    "gamma_scalp": 60,       # 1 min (fast market)
-    "stale_line": 60,        # 1 min
-    "closing_line": 45,      # 45s (convergence zone)
+    "edge_scalp": 90,        # 1.5 min - core strategy, trade often
+    "momentum": 60,          # 1 min
+    "halftime_edge": 180,    # 3 min
+    "gamma_scalp": 45,       # 45s (fast market)
+    "stale_line": 45,        # 45s
+    "closing_line": 30,      # 30s (convergence zone)
 }
 
 

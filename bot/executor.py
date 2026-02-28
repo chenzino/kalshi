@@ -1,13 +1,13 @@
 """Trade execution engine for short-term volatility scalping.
 
 Rules:
-- 1 contract per trade, max 95c
-- Max 3 open positions, max 1 per game event
+- 1-5 contracts per trade, max 95c each
+- Max 5 open positions across multiple games
 - Only KXNCAAMBGAME (men's moneyline)
-- Min signal strength 6, min edge 3c after fees
+- Min signal strength 5, min edge 3c after fees
 - Orders expire after 60s if not filled
 - Positions auto-close after 5 min max hold
-- Exit priority: model edge gone > take profit +5c > stop loss -5c > time 5min
+- Exit: model edge gone > take profit +5c > stop loss -5c > time 5min
 """
 import time
 import json
@@ -20,10 +20,10 @@ DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
 EST = timezone(timedelta(hours=-5))
 
 # ── Execution Parameters ──────────────────────────────────────
-MAX_CONTRACTS = 1
+MAX_CONTRACTS = 1      # Contracts per order (keep at 1, scale via repeat entries)
 MAX_COST_CENTS = 95
-MIN_SIGNAL_STRENGTH = 6
-MAX_POSITIONS = 3
+MIN_SIGNAL_STRENGTH = 5  # Lowered from 6 to get more trades for learning
+MAX_POSITIONS = 5      # Up from 3 - spread across multiple games
 MIN_EDGE = 3           # Min edge (cents) to enter
 ORDER_TIMEOUT = 60     # Cancel unfilled after 60s
 STOP_LOSS = 5          # Hard stop at -5c
@@ -31,8 +31,8 @@ TAKE_PROFIT = 5        # Hard take at +5c
 TIME_EXIT = 300        # 5 min max hold
 EDGE_EXIT = -1         # Exit when model edge flips to -1c
 FILL_CHECK_INTERVAL = 15  # Check fills every 15s
-TICKER_COOLDOWN = 180  # 3 min between trades on same ticker
-GAME_COOLDOWN = 60     # 1 min between trades on same game event
+TICKER_COOLDOWN = 120  # 2 min between trades on same ticker (was 3)
+GAME_COOLDOWN = 30     # 30s between trades on same game event (was 60)
 
 
 class Position:
@@ -120,11 +120,11 @@ class Executor:
         if ticker in self.positions:
             return
 
-        # Gate: only 1 position per game event (don't trade both sides)
+        # Gate: max 1 position per game event at a time (don't trade both sides)
         game_event = _extract_game_event(ticker)
-        for pos in self.positions.values():
-            if pos.game_event == game_event:
-                return
+        game_positions = sum(1 for p in self.positions.values() if p.game_event == game_event)
+        if game_positions >= 1:
+            return
 
         # Gate: ticker cooldown
         now = time.time()
