@@ -23,24 +23,30 @@ EST = timezone(timedelta(hours=-5))
 
 # ── Execution Parameters ──────────────────────────────────────
 TARGET_BANKROLL_PCT = 6     # Target 6% of bankroll per position
-MAX_COST_CENTS = 85         # Don't pay more than 85c per contract
+MIN_ENTRY_PRICE = 25        # Don't buy contracts below 25c (gaps kill you)
+MAX_COST_CENTS = 75         # Don't pay more than 75c per contract
 MIN_SIGNAL_STRENGTH = 5
-MAX_POSITIONS = 8           # Spread across many games
-MIN_EDGE = 3                # Min edge (cents) to enter
+MAX_POSITIONS = 5           # Fewer, higher-conviction positions
+MIN_EDGE = 4                # Min edge (cents) to enter
+MAX_EDGE = 25               # Max edge - beyond this model is wrong, not right
 ORDER_TIMEOUT = 45          # Cancel unfilled after 45s
 FILL_CHECK_INTERVAL = 15
-TICKER_COOLDOWN = 60        # 1 min between trades on same ticker
-GAME_COOLDOWN = 20          # 20s between trades on same game event
+TICKER_COOLDOWN = 120       # 2 min between trades on same ticker
+GAME_COOLDOWN = 300         # 5 min between trades on same game (stop re-entering after stops)
+MAX_LOSS_PER_CONTRACT = 8   # Absolute cent cap on loss per contract
 
 # ── Default Exit Parameters (overridden by adaptive tuner) ────
 DEFAULT_EXITS = {
-    "stop_loss_pct": 10,        # -10% of capital deployed
+    "stop_loss_pct": 15,        # -15% of capital (wider to survive noise)
     "take_profit_pct": 15,      # +15% of capital deployed
     "trailing_stop_pct": 5,     # Give back at most 5% from peak
     "trailing_activate_pct": 8, # Trailing stop kicks in at +8%
     "time_exit": 300,           # 5 min max hold
     "edge_exit": -1,            # Exit when model edge flips to -1c
 }
+
+# Series whitelist - ONLY men's full-game moneyline
+ALLOWED_SERIES = "KXNCAAMBGAME"
 
 TUNED_PARAMS_FILE = os.path.join(DATA_DIR, "learning", "tuned_exits.json")
 
@@ -217,7 +223,12 @@ class Executor:
         if strength < MIN_SIGNAL_STRENGTH or edge < MIN_EDGE:
             return
 
-        if "KXNCAAMBGAME" not in ticker:
+        # Edge sanity: too-large edge means model is wrong, not a real opportunity
+        if edge > MAX_EDGE:
+            return
+
+        # Strict series check - ONLY men's full-game moneyline
+        if not ticker.startswith(ALLOWED_SERIES):
             return
 
         if len(self.positions) >= MAX_POSITIONS:
@@ -237,8 +248,8 @@ class Executor:
         if now - self.recent_events.get(game_event, 0) < GAME_COOLDOWN:
             return
 
-        # Price sanity
-        if market_price is None or market_price < 10 or market_price > 90:
+        # Price range: avoid extremes where a single tick = huge % move
+        if market_price is None or market_price < MIN_ENTRY_PRICE or market_price > (100 - MIN_ENTRY_PRICE):
             return
 
         # Calculate per-contract cost
@@ -247,7 +258,7 @@ class Executor:
         else:
             unit_price = min(100 - market_price + 1, MAX_COST_CENTS)
 
-        if unit_price > MAX_COST_CENTS or unit_price < 10:
+        if unit_price > MAX_COST_CENTS or unit_price < MIN_ENTRY_PRICE:
             return
 
         # Fee check (~1c each way conservative)
@@ -420,8 +431,8 @@ class Executor:
             elif pos.peak_pnl_pct >= ex["trailing_activate_pct"] and pnl_pct <= pos.peak_pnl_pct - ex["trailing_stop_pct"]:
                 self._exit_position(ticker, pos, current, "trailing_stop", pnl_total, pnl_pct)
                 to_close.append(ticker)
-            # 4. STOP LOSS
-            elif pnl_pct <= -ex["stop_loss_pct"]:
+            # 4. STOP LOSS (% or absolute cent cap, whichever triggers first)
+            elif pnl_pct <= -ex["stop_loss_pct"] or pnl_per <= -MAX_LOSS_PER_CONTRACT:
                 self._exit_position(ticker, pos, current, "stop_loss", pnl_total, pnl_pct)
                 to_close.append(ticker)
             # 5. TIME EXIT
@@ -431,8 +442,13 @@ class Executor:
 
         for t in to_close:
             game_event = _extract_game_event(t)
+            pos = self.positions[t]
             self.recent_tickers[t] = now
-            self.recent_events[game_event] = now
+            # After a stop loss, cool off the entire game for 10 min
+            if pos.exit_reason == "stop_loss":
+                self.recent_events[game_event] = now + 300  # Extra 5 min on top of GAME_COOLDOWN
+            else:
+                self.recent_events[game_event] = now
             del self.positions[t]
 
     def _exit_position(self, ticker, pos, exit_price, reason, pnl_total, pnl_pct):
